@@ -33,11 +33,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DJANGO_SETTINGS_MODULE=config.settings.production
 
-# Install runtime dependencies including su-exec
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
-    su-exec \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

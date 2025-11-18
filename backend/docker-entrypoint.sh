@@ -37,4 +37,4 @@ echo "✅ Initialization complete!"
 
 # Switch to django user and execute the main command
 echo "👤 Switching to django user..."
-exec su-exec django "$@"
+exec gosu django "$@"
