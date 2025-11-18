@@ -3,6 +3,10 @@ set -e
 
 echo "🚀 Starting Django container..."
 
+# Fix permissions on volumes (they may be created with root ownership)
+echo "🔧 Fixing volume permissions..."
+chown -R django:django /app/staticfiles /app/media /app/logs || true
+
 # Wait for MongoDB to be ready
 echo "⏳ Waiting for MongoDB..."
 until python -c "import mongoengine; mongoengine.connect(host='${MONGODB_URI}')" 2>/dev/null; do
@@ -31,5 +35,6 @@ fi
 
 echo "✅ Initialization complete!"
 
-# Execute the main command
-exec "$@"
+# Switch to django user and execute the main command
+echo "👤 Switching to django user..."
+exec su-exec django "$@"
