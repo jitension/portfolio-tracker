@@ -23,14 +23,14 @@ until python -c "import redis; r=redis.from_url('${REDIS_URL}'); r.ping()" 2>/de
 done
 echo "✅ Redis is ready!"
 
-# Run migrations for Django's internal tables (admin, sessions, celery_beat, etc.)
+# Run migrations as django user
 echo "🔄 Running database migrations..."
-python manage.py migrate --noinput
+su -s /bin/bash django -c "python manage.py migrate --noinput"
 
 # Collect static files (only for Django container)
 if [ "${COLLECT_STATIC}" = "true" ]; then
   echo "📦 Collecting static files..."
-  python manage.py collectstatic --noinput --clear
+  su -s /bin/bash django -c "python manage.py collectstatic --noinput --clear"
 fi
 
 echo "✅ Initialization complete!"
