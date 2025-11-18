@@ -1,0 +1,11 @@
+# Production requirements
+-r base.txt
+
+# Production server
+gunicorn==21.2.0
+
+# Monitoring (optional)
+sentry-sdk==1.39.1
+
+# Performance
+django-redis==5.4.0
