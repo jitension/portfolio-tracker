@@ -75,6 +75,7 @@ services:
       - CSRF_COOKIE_SECURE=${CSRF_COOKIE_SECURE}
       - SESSION_COOKIE_SAMESITE=${SESSION_COOKIE_SAMESITE}
       - CSRF_COOKIE_SAMESITE=${CSRF_COOKIE_SAMESITE}
+      - COLLECT_STATIC=true
       - DEBUG=False
     depends_on:
       - mongodb
