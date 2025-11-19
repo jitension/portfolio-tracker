@@ -51,7 +51,7 @@ export const LoginPage = () => {
             Portfolio Tracker
           </Typography>
           <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 3 }}>
-            Sign in to view your $178k+ portfolio
+            Your personal investment dashboard
           </Typography>
 
           {error && (

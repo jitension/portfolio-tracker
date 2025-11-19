@@ -335,14 +335,14 @@ class PortfolioViewSet(viewsets.ViewSet):
             
             # Initialize services
             rh_client = RobinhoodClient(rh_account)
-            rh_client.authenticate()
+            # Session already exists from account linking - no need to re-authenticate
             
             margin_service = MarginCalculationService(request.user, rh_client)
             
             # Get margin overview
             overview_data = margin_service.get_margin_overview(portfolio)
             
-            rh_client.logout()
+            # Don't logout - keep session active
             
             serializer = InvestmentOverviewSerializer(data=overview_data)
             serializer.is_valid(raise_exception=True)
@@ -391,14 +391,14 @@ class PortfolioViewSet(viewsets.ViewSet):
             
             # Initialize services
             rh_client = RobinhoodClient(rh_account)
-            rh_client.authenticate()
+            # Session already exists from account linking - no need to re-authenticate
             
             pnl_service = PnLCalculationService(request.user, rh_client)
             
             # Get P&L overview
             pnl_data = pnl_service.get_pnl_overview(portfolio)
             
-            rh_client.logout()
+            # Don't logout - keep session active
             
             serializer = PnLMetricsSerializer(data=pnl_data)
             serializer.is_valid(raise_exception=True)
@@ -447,14 +447,14 @@ class PortfolioViewSet(viewsets.ViewSet):
             
             # Initialize services
             rh_client = RobinhoodClient(rh_account)
-            rh_client.authenticate()
+            # Session already exists from account linking - no need to re-authenticate
             
             top_movers_service = TopMoversService(request.user, rh_client)
             
             # Get complete analytics
             analytics_data = top_movers_service.get_complete_analytics(portfolio)
             
-            rh_client.logout()
+            # Don't logout - keep session active
             
             serializer = HoldingsAnalyticsSerializer(data=analytics_data)
             serializer.is_valid(raise_exception=True)

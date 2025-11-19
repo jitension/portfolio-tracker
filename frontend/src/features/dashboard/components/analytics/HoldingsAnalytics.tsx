@@ -15,10 +15,14 @@ const HoldingsAnalytics: React.FC = () => {
   const { holdingsAnalytics, isLoadingAnalytics, error } = useAppSelector(
     (state) => state.portfolio
   );
+  const { accounts } = useAppSelector((state) => state.robinhood);
 
   useEffect(() => {
-    dispatch(fetchHoldingsAnalytics());
-  }, [dispatch]);
+    // Only fetch holdings analytics if Robinhood accounts exist
+    if (accounts.length > 0) {
+      dispatch(fetchHoldingsAnalytics());
+    }
+  }, [dispatch, accounts.length]);
 
   if (isLoadingAnalytics) {
     return (

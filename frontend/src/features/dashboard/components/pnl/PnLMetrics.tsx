@@ -14,10 +14,14 @@ const PnLMetrics: React.FC = () => {
   const { pnlMetrics, isLoadingPnL, error } = useAppSelector(
     (state) => state.portfolio
   );
+  const { accounts } = useAppSelector((state) => state.robinhood);
 
   useEffect(() => {
-    dispatch(fetchPnLMetrics());
-  }, [dispatch]);
+    // Only fetch P&L metrics if Robinhood accounts exist
+    if (accounts.length > 0) {
+      dispatch(fetchPnLMetrics());
+    }
+  }, [dispatch, accounts.length]);
 
   if (isLoadingPnL) {
     return (

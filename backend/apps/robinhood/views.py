@@ -93,11 +93,15 @@ class RobinhoodAccountViewSet(viewsets.GenericViewSet):
             account_info = client.get_account_info()
             account_number = account_info.get('account_number', 'UNKNOWN')
             
-            # Logout after getting account info
-            client.logout()
+            # Don't logout - keep session active for subsequent API calls
+            # Robin-stocks will handle session caching automatically
             
-            # Check if account already linked
-            existing = RobinhoodAccount.get_account_by_number(account_number)
+            # Check if account already linked (only check active accounts)
+            existing = RobinhoodAccount.objects(
+                account_number=account_number,
+                is_active=True
+            ).first()
+            
             if existing and existing.user_id == request.user.id:
                 return Response({
                     'success': False,
@@ -231,9 +235,15 @@ class RobinhoodAccountViewSet(viewsets.GenericViewSet):
     
     def destroy(self, request, pk=None):
         """
-        Unlink (deactivate) a Robinhood account.
+        Unlink and delete a Robinhood account along with all related data.
         
         DELETE /api/v1/robinhood/accounts/:id/
+        
+        This will permanently delete:
+        - The Robinhood account
+        - All holdings
+        - All portfolio snapshots
+        - Portfolio data
         """
         try:
             account = RobinhoodAccount.objects(id=pk, user_id=request.user.id).first()
@@ -248,13 +258,22 @@ class RobinhoodAccountViewSet(viewsets.GenericViewSet):
                     }
                 }, status=status.HTTP_404_NOT_FOUND)
             
-            # Deactivate instead of delete (soft delete)
-            account.deactivate()
+            # Delete account and all related data (hard delete)
+            deleted_counts = account.delete_with_related_data()
+            
+            security_logger.info(
+                f"Robinhood account deleted by user {request.user.id}",
+                extra={
+                    'user_id': request.user.id,
+                    'deleted_counts': deleted_counts
+                }
+            )
             
             return Response({
                 'success': True,
                 'data': {
-                    'message': 'Robinhood account unlinked successfully'
+                    'message': 'Robinhood account and all related data unlinked successfully',
+                    'deleted': deleted_counts
                 }
             }, status=status.HTTP_200_OK)
         

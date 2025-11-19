@@ -128,11 +128,7 @@ class PortfolioService:
             # Update sync status to pending
             self.robinhood_account.update_sync_status('pending')
             
-            # Authenticate with Robinhood
-            if not self.rh_client.authenticate():
-                raise PortfolioSyncError("Failed to authenticate with Robinhood")
-            
-            # Fetch portfolio data from Robinhood
+            # Fetch portfolio data from Robinhood (using cached session)
             rh_portfolio_data = self.rh_client.get_portfolio()
             
             if not rh_portfolio_data:
@@ -183,10 +179,6 @@ class PortfolioService:
             self.robinhood_account.update_sync_status('failed', error=str(e))
             
             raise PortfolioSyncError(f"Portfolio sync failed: {str(e)}") from e
-        
-        finally:
-            # Always logout from Robinhood
-            self.rh_client.logout()
     
     def _parse_portfolio_data(self, rh_data: Dict[str, Any]) -> Dict[str, Any]:
         """

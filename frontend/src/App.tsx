@@ -10,6 +10,7 @@ import theme from './app/theme';
 import LoginPage from './features/auth/components/LoginPage';
 import DashboardPage from './features/dashboard/pages/DashboardPage';
 import HoldingsPage from './features/holdings/components/HoldingsPage';
+import SettingsPage from './features/settings/components/SettingsPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
 
@@ -37,6 +38,16 @@ function App() {
                 <ProtectedRoute>
                   <AppShell>
                     <HoldingsPage />
+                  </AppShell>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <AppShell>
+                    <SettingsPage />
                   </AppShell>
                 </ProtectedRoute>
               }

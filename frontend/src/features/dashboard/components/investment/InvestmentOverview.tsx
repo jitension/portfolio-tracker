@@ -25,10 +25,14 @@ const InvestmentOverview: React.FC = () => {
   const { investmentMetrics, isLoadingInvestment, isLoading, error } = useAppSelector(
     (state) => state.portfolio
   );
+  const { accounts } = useAppSelector((state) => state.robinhood);
 
   useEffect(() => {
-    dispatch(fetchInvestmentMetrics());
-  }, [dispatch]);
+    // Only fetch investment metrics if Robinhood accounts exist
+    if (accounts.length > 0) {
+      dispatch(fetchInvestmentMetrics());
+    }
+  }, [dispatch, accounts.length]);
 
   const handleSync = async () => {
     // Sync portfolio data from Robinhood

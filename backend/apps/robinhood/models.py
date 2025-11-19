@@ -116,3 +116,68 @@ class RobinhoodAccount(Document):
             f"Robinhood account deactivated: {self.account_number}",
             extra={'user_id': self.user_id}
         )
+    
+    def delete_with_related_data(self):
+        """
+        Delete the account and all related data (hard delete).
+        
+        This will delete:
+        - All Holdings associated with this account
+        - All PortfolioSnapshots associated with this account
+        - Portfolio associated with this account
+        - The RobinhoodAccount itself
+        
+        Returns:
+            dict: Summary of deleted records
+        """
+        from apps.portfolio.models import Portfolio, Holding, PortfolioSnapshot
+        
+        account_number = self.account_number
+        user_id = self.user_id
+        account_id = self.id
+        
+        # Track deletion counts
+        deleted = {
+            'holdings': 0,
+            'snapshots': 0,
+            'portfolio': 0,
+            'account': 0
+        }
+        
+        try:
+            # Delete all holdings
+            holdings_count = Holding.objects(robinhood_account_id=account_id).count()
+            Holding.objects(robinhood_account_id=account_id).delete()
+            deleted['holdings'] = holdings_count
+            
+            # Delete all portfolio snapshots
+            snapshots_count = PortfolioSnapshot.objects(robinhood_account_id=account_id).count()
+            PortfolioSnapshot.objects(robinhood_account_id=account_id).delete()
+            deleted['snapshots'] = snapshots_count
+            
+            # Delete portfolio
+            portfolio = Portfolio.objects(robinhood_account_id=account_id).first()
+            if portfolio:
+                portfolio.delete()
+                deleted['portfolio'] = 1
+            
+            # Delete the account itself
+            self.delete()
+            deleted['account'] = 1
+            
+            logger.info(
+                f"Robinhood account and related data deleted: {account_number} "
+                f"(Holdings: {deleted['holdings']}, Snapshots: {deleted['snapshots']}, "
+                f"Portfolio: {deleted['portfolio']})",
+                extra={'user_id': user_id, 'deleted_counts': deleted}
+            )
+            
+            return deleted
+            
+        except Exception as e:
+            logger.error(
+                f"Error deleting Robinhood account {account_number} and related data: {str(e)}",
+                exc_info=True,
+                extra={'user_id': user_id}
+            )
+            raise

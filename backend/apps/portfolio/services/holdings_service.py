@@ -105,11 +105,7 @@ class HoldingsService:
         )
         
         try:
-            # Authenticate with Robinhood
-            if not self.rh_client.authenticate():
-                raise PortfolioSyncError("Failed to authenticate with Robinhood")
-            
-            # Fetch stock positions from Robinhood
+            # Fetch stock positions from Robinhood (using cached session)
             rh_positions = self.rh_client.get_stock_positions()
             
             if rh_positions is None:
@@ -193,10 +189,6 @@ class HoldingsService:
                 exc_info=True
             )
             raise PortfolioSyncError(f"Holdings sync failed: {str(e)}") from e
-        
-        finally:
-            # Always logout from Robinhood
-            self.rh_client.logout()
     
     def _parse_stock_position(self, rh_position: Dict[str, Any]) -> Dict[str, Any]:
         """

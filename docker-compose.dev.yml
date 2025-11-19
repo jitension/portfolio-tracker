@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # MongoDB Database
   mongodb:
-    image: mongo:6
+    image: mongo:4.4-focal
     container_name: portfolio_mongodb_dev
     ports:
       - "27017:27017"
@@ -11,6 +11,7 @@ services:
       - MONGO_INITDB_DATABASE=portfolio_dev
     volumes:
       - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
     networks:
       - portfolio_network
     restart: unless-stopped
@@ -38,7 +39,7 @@ services:
     volumes:
       - ./backend:/app
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.development
       - MONGODB_URI=mongodb://mongodb:27017/portfolio_dev
@@ -80,7 +81,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: portfolio_celery_beat_dev
-    command: celery -A config beat -l info
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     volumes:
       - ./backend:/app
     environment:
@@ -90,12 +91,32 @@ services:
     depends_on:
       - mongodb
       - redis
+      - django
+    networks:
+      - portfolio_network
+    restart: unless-stopped
+
+  # Frontend Development Server
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: portfolio_frontend_dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8001/api/v1
     networks:
       - portfolio_network
     restart: unless-stopped
 
 volumes:
   mongodb_data:
+    driver: local
+  mongodb_config:
     driver: local
   redis_data:
     driver: local

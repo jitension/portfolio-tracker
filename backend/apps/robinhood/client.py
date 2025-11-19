@@ -41,6 +41,194 @@ class RobinhoodClient:
         self.is_authenticated = False
         self.session_active = False
     
+    def _ensure_session(self):
+        """
+        Ensure robin-stocks has an active session before making API calls.
+        
+        This method MUST be called before every robin_stocks API call to guarantee
+        the session is active, especially in multi-process/container environments
+        where in-memory state doesn't persist between requests.
+        
+        Raises:
+            RobinhoodAPIError: If session cannot be established
+        """
+        from django.utils import timezone
+        from robin_stocks.robinhood.helper import update_session, set_login_state
+        
+        # First check if we already have an active session from a recent authentication
+        # This happens during link_account() flow where authenticate() just succeeded
+        if self.session_active:
+            logger.debug("Session already active, skipping restoration")
+            return
+        
+        # Check if we have an account with stored token
+        if not self.account or not self.account.auth_token_encrypted:
+            raise RobinhoodAPIError("No stored authentication token available. Please log in first.")
+        
+        # Check if token is expired
+        if self.account.token_expires_at and self.account.token_expires_at <= timezone.now():
+            raise RobinhoodAPIError(f"Authentication token expired. Please log in again.")
+        
+        try:
+            # Decrypt stored token
+            token_data = decrypt_credentials(self.account.auth_token_encrypted)
+            
+            # Extract token components
+            access_token = token_data.get('access_token')
+            token_type = token_data.get('token_type', 'Bearer')
+            
+            if not access_token:
+                raise RobinhoodAPIError("No access_token found in stored credentials")
+            
+            # Restore the OAuth token in robin-stocks session
+            update_session('Authorization', f"{token_type} {access_token}")
+            set_login_state(True)
+            
+            logger.debug(f"Session restored for account {self.account.account_number}")
+            self.is_authenticated = True
+            self.session_active = True
+        
+        except CredentialDecryptionError as e:
+            logger.error(f"Failed to decrypt credentials: {str(e)}")
+            raise RobinhoodAPIError("Failed to decrypt stored credentials") from e
+        except Exception as e:
+            logger.error(f"Failed to restore session: {str(e)}")
+            raise RobinhoodAPIError(f"Failed to establish session: {str(e)}") from e
+    
+    def _handle_verification_workflow(self, device_token: str, workflow_id: str):
+        """
+        Handle Robinhood's verification workflow for push notifications.
+        
+        Args:
+            device_token: The device token generated for this session
+            workflow_id: The workflow ID from the verification_workflow response
+            
+        Raises:
+            RobinhoodAPIError: If verification fails or times out
+        """
+        import requests
+        
+        logger.info(f"Starting verification workflow with ID: {workflow_id}")
+        
+        # Step 1: POST to pathfinder/user_machine to register the verification
+        pathfinder_url = "https://api.robinhood.com/pathfinder/user_machine/"
+        machine_payload = {
+            'device_id': device_token,
+            'flow': 'suv',
+            'input': {'workflow_id': workflow_id}
+        }
+        
+        try:
+            machine_response = requests.post(pathfinder_url, json=machine_payload, timeout=15)
+            machine_data = machine_response.json()
+            
+            if 'id' not in machine_data:
+                raise RobinhoodAPIError("No verification ID returned from Robinhood")
+            
+            machine_id = machine_data['id']
+            logger.info(f"Machine ID obtained: {machine_id}")
+        
+        except Exception as e:
+            logger.error(f"Failed to register verification workflow: {str(e)}")
+            raise RobinhoodAPIError(f"Verification workflow failed: {str(e)}")
+        
+        # Step 2: Poll the inquiries endpoint to get challenge details
+        inquiries_url = f"https://api.robinhood.com/pathfinder/inquiries/{machine_id}/user_view/"
+        start_time = time.time()
+        timeout = 120  # 2 minute timeout
+        
+        challenge_id = None
+        
+        while time.time() - start_time < timeout:
+            time.sleep(5)
+            
+            try:
+                inquiries_response = requests.get(inquiries_url, timeout=15)
+                
+                if inquiries_response.status_code != 200:
+                    logger.warning(f"Inquiries request returned {inquiries_response.status_code}")
+                    continue
+                
+                inquiries_data = inquiries_response.json()
+                
+                # Check for sheriff_challenge
+                if 'context' in inquiries_data and 'sheriff_challenge' in inquiries_data['context']:
+                    challenge = inquiries_data['context']['sheriff_challenge']
+                    challenge_type = challenge.get('type')
+                    challenge_status = challenge.get('status')
+                    challenge_id = challenge.get('id')
+                    
+                    logger.info(f"Challenge found: type={challenge_type}, status={challenge_status}, id={challenge_id}")
+                    
+                    # If it's a prompt (push notification), poll for approval
+                    if challenge_type == "prompt":
+                        logger.info("📱 Push notification sent! Waiting for approval on Robinhood app...")
+                        prompt_url = f"https://api.robinhood.com/push/{challenge_id}/get_prompts_status/"
+                        
+                        # Poll the prompt status
+                        prompt_start = time.time()
+                        while time.time() - prompt_start < timeout:
+                            time.sleep(5)
+                            
+                            try:
+                                prompt_response = requests.get(prompt_url, timeout=15)
+                                prompt_data = prompt_response.json()
+                                
+                                if prompt_data.get('challenge_status') == 'validated':
+                                    logger.info("✓ Push notification approved!")
+                                    break
+                                else:
+                                    logger.info(f"Waiting for approval... (status: {prompt_data.get('challenge_status')})")
+                            
+                            except Exception as e:
+                                logger.warning(f"Error checking prompt status: {str(e)}")
+                                continue
+                        
+                        break
+                    
+                    elif challenge_status == "validated":
+                        logger.info("Challenge already validated!")
+                        break
+            
+            except Exception as e:
+                logger.warning(f"Error polling inquiries: {str(e)}")
+                continue
+        
+        # Step 3: Final verification - poll workflow status
+        logger.info("Checking final workflow status...")
+        inquiries_payload = {"sequence": 0, "user_input": {"status": "continue"}}
+        
+        retry_attempts = 5
+        while time.time() - start_time < timeout and retry_attempts > 0:
+            try:
+                final_response = requests.post(inquiries_url, json=inquiries_payload, timeout=15)
+                final_data = final_response.json()
+                
+                if 'type_context' in final_data:
+                    result = final_data['type_context'].get('result')
+                    if result == 'workflow_status_approved':
+                        logger.info("✓ Verification workflow approved!")
+                        return
+                
+                # Check verification_workflow status
+                workflow_status = final_data.get('verification_workflow', {}).get('workflow_status')
+                if workflow_status == 'workflow_status_approved':
+                    logger.info("✓ Workflow status approved!")
+                    return
+                elif workflow_status == 'workflow_status_internal_pending':
+                    logger.info("Still waiting for final approval...")
+                
+                time.sleep(5)
+                retry_attempts -= 1
+            
+            except Exception as e:
+                logger.warning(f"Error checking final status: {str(e)}")
+                retry_attempts -= 1
+                time.sleep(5)
+        
+        # If we got here, assume approval (robin-stocks does this)
+        logger.warning("Verification check timed out, assuming approval and proceeding...")
+    
     def authenticate(self, username: str = None, password: str = None, 
                     mfa_code: str = None, force_fresh_login: bool = False) -> Dict:
         """
@@ -114,93 +302,130 @@ class RobinhoodClient:
                     )
             
             # Attempt login
-            logger.info(f"Attempting Robinhood login for: {username}")
+            logger.info(f"=== Starting Robinhood Authentication ===")
+            logger.info(f"Username: {username}")
+            logger.info(f"MFA code provided: {bool(mfa_code)}")
+            logger.info(f"MFA code value (first 2 chars): {mfa_code[:2] if mfa_code else 'None'}")
             
-            # robin-stocks 3.4.0 API
-            # Note: For push notification, don't pass mfa_code
+            # Use rh.login() as designed
+            logger.info("Calling rh.login() with parameters:")
+            login_params = {
+                'username': username,
+                'password': '***' if password else None,
+                'expiresIn': 86400,
+                'scope': 'internal',
+                'by_sms': True,
+                'store_session': True,
+                'mfa_code': mfa_code
+            }
+            logger.info(f"Login parameters: {login_params}")
+            
+            # Attempt login using direct API call (following robin-stocks pattern)
+            import requests
+            import secrets
+            
+            # Generate device token (cryptographically secure)
+            def generate_device_token():
+                rands = [secrets.randbelow(256) for _ in range(16)]
+                hexa = [str(hex(i + 256)).lstrip("0x")[1:] for i in range(256)]
+                token = ""
+                for i, r in enumerate(rands):
+                    token += hexa[r]
+                    if i in [3, 5, 7, 9]:
+                        token += "-"
+                return token
+            
+            device_token = generate_device_token()
+            login_url = "https://api.robinhood.com/oauth2/token/"
+            
+            # Correct payload following robin-stocks implementation
+            payload = {
+                'client_id': 'c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS',
+                'expires_in': 86400,
+                'grant_type': 'password',
+                'password': password,
+                'scope': 'internal',
+                'username': username,
+                'device_token': device_token,
+                'try_passkeys': False,
+                'token_request_path': '/login',
+                'create_read_only_secondary_token': True,
+            }
+            
             if mfa_code:
-                login_result = rh.login(
-                    username=username,
-                    password=password,
-                    expiresIn=86400,
-                    store_session=True,  # Enable session persistence
-                    mfa_code=mfa_code
-                )
-            else:
-                # No MFA code - let Robinhood handle push notification
-                login_result = rh.login(
-                    username=username,
-                    password=password,
-                    expiresIn=86400,
-                    store_session=True  # Enable session persistence
-                )
+                payload['mfa_code'] = mfa_code
             
-            # Log response for debugging
-            logger.info(f"Robinhood login result type: {type(login_result)}, value: {login_result}")
+            logger.info(f"Attempting login to Robinhood API...")
             
-            # robin-stocks may return None for push notification approval
-            # We need to poll for successful authentication
-            
-            # Retry logic for push notification approval
-            max_retries = 12  # Total ~60 seconds
-            retry_delay = 5   # 5 seconds between retries
-            
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Verifying login (attempt {attempt + 1}/{max_retries})...")
-                    
-                    # Try to fetch account profile to verify login
-                    test_profile = rh.load_account_profile()
-                    
-                    if test_profile and isinstance(test_profile, dict) and test_profile.get('url'):
-                        # Login successful!
-                        self.is_authenticated = True
-                        self.session_active = True
-                        
-                        # Store the authentication token for future use
-                        if self.account:
-                            try:
-                                # Store authentication metadata with expiration time
-                                # We don't need to store the actual token since robin-stocks
-                                # persists it to disk in ~/.tokens/robinhood.pickle
-                                from core.encryption import CredentialEncryption
-                                encryption = CredentialEncryption()
-                                token_data = {'authenticated': True, 'username': username}
-                                self.account.auth_token_encrypted = encryption.encrypt(token_data)
-                                self.account.token_expires_at = timezone.now() + timedelta(hours=24)
-                                self.account.save()
-                                logger.info(f"Stored authentication metadata for account {self.account.account_number}")
-                            except Exception as e:
-                                logger.warning(f"Failed to store token metadata: {str(e)}, continuing anyway")
-                        
-                        logger.info(
-                            f"Robinhood login successful after {attempt + 1} attempts: {username}",
-                            extra={'username': username}
-                        )
-                        
-                        return {
-                            'success': True,
-                            'message': f'Authentication successful (verified in {(attempt + 1) * retry_delay}s)',
-                            'access_token': 'session_active',
-                            'detail': 'Logged in - push notification approved or MFA code accepted',
-                            'attempts': attempt + 1
-                        }
+            try:
+                response = requests.post(login_url, json=payload, timeout=30)
+                logger.info(f"Response status code: {response.status_code}")
                 
-                except Exception as e:
-                    # If this is the last attempt, raise the error
-                    if attempt == max_retries - 1:
-                        logger.error(f"All {max_retries} verification attempts failed")
-                        raise RobinhoodAPIError(
-                            f"Authentication timeout: Waited {max_retries * retry_delay}s but login not verified. "
-                            f"Please approve the push notification in your Robinhood app or check your credentials."
-                        )
+                try:
+                    login_result = response.json()
+                    logger.info(f"Response keys: {list(login_result.keys())}")
+                except ValueError as e:
+                    logger.error(f"Could not parse response as JSON: {str(e)}")
+                    raise RobinhoodAPIError(f"Invalid JSON response from Robinhood: {response.text}")
+                
+                # Check if verification workflow is required
+                if 'verification_workflow' in login_result:
+                    logger.info("Verification workflow required - handling push notification...")
+                    workflow_id = login_result['verification_workflow']['id']
                     
-                    # Otherwise, wait and retry
-                    logger.info(f"Verification attempt {attempt + 1} failed, waiting {retry_delay}s...")
-                    time.sleep(retry_delay)
-            
-            # Should not reach here due to the raise in the loop
-            raise RobinhoodAPIError("Authentication verification loop completed without success")
+                    # Handle the verification workflow
+                    self._handle_verification_workflow(device_token, workflow_id)
+                    
+                    # Retry login after verification
+                    logger.info("Retrying login after verification approval...")
+                    response = requests.post(login_url, json=payload, timeout=30)
+                    login_result = response.json()
+                
+                # Check if we got an access token
+                if 'access_token' in login_result:
+                    self.is_authenticated = True
+                    self.session_active = True
+                    
+                    # Initialize robin-stocks session
+                    from robin_stocks.robinhood.helper import update_session, set_login_state
+                    update_session('Authorization', f"{login_result['token_type']} {login_result['access_token']}")
+                    set_login_state(True)
+                    
+                    logger.info(f"✓ Authentication successful!")
+                    
+                    # Store the actual OAuth access token for session restoration
+                    if self.account:
+                        try:
+                            from core.encryption import CredentialEncryption
+                            encryption = CredentialEncryption()
+                            # Store the real OAuth token
+                            token_data = {
+                                'access_token': login_result['access_token'],
+                                'token_type': login_result.get('token_type', 'Bearer'),
+                                'username': username
+                            }
+                            self.account.auth_token_encrypted = encryption.encrypt(token_data)
+                            self.account.token_expires_at = timezone.now() + timedelta(hours=24)
+                            self.account.save()
+                            logger.info(f"Stored OAuth access token for session restoration")
+                        except Exception as e:
+                            logger.warning(f"Failed to store OAuth token: {str(e)}")
+                    
+                    return {
+                        'success': True,
+                        'message': 'Authentication successful',
+                        'access_token': login_result.get('access_token'),
+                        'detail': login_result.get('detail', 'Logged in successfully')
+                    }
+                else:
+                    logger.error(f"Login failed - no access token in response")
+                    logger.error(f"Response: {login_result}")
+                    error_msg = login_result.get('detail', 'Authentication failed')
+                    raise RobinhoodAPIError(f"Login failed: {error_msg}")
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request failed: {str(e)}")
+                raise RobinhoodAPIError(f"Failed to connect to Robinhood: {str(e)}")
         
         except MFARequiredError:
             raise
@@ -235,8 +460,8 @@ class RobinhoodClient:
         Raises:
             RobinhoodAPIError: If not authenticated or API error
         """
-        if not self.is_authenticated:
-            raise RobinhoodAPIError("Not authenticated. Call authenticate() first.")
+        # Ensure session is active before API call
+        self._ensure_session()
         
         try:
             account_profile = rh.load_account_profile()
@@ -253,8 +478,8 @@ class RobinhoodClient:
         Returns:
             Dict with portfolio data (equity, market value, etc.)
         """
-        if not self.is_authenticated:
-            raise RobinhoodAPIError("Not authenticated. Call authenticate() first.")
+        # Ensure session is active before API call
+        self._ensure_session()
         
         try:
             portfolio = rh.load_portfolio_profile()
@@ -271,8 +496,8 @@ class RobinhoodClient:
         Returns:
             Dict with holdings categorized by type
         """
-        if not self.is_authenticated:
-            raise RobinhoodAPIError("Not authenticated. Call authenticate() first.")
+        # Ensure session is active before API call
+        self._ensure_session()
         
         try:
             # Get stocks
@@ -310,8 +535,8 @@ class RobinhoodClient:
         Returns:
             List of stock position dictionaries
         """
-        if not self.is_authenticated:
-            raise RobinhoodAPIError("Not authenticated. Call authenticate() first.")
+        # Ensure session is active before API call
+        self._ensure_session()
         
         try:
             positions = rh.get_open_stock_positions()
@@ -362,8 +587,8 @@ class RobinhoodClient:
             - cash: Cash balance
             Returns None if account is not a margin account
         """
-        if not self.is_authenticated:
-            raise RobinhoodAPIError("Not authenticated. Call authenticate() first.")
+        # Ensure session is active before API call
+        self._ensure_session()
         
         try:
             # robin-stocks method to get margin data
@@ -409,8 +634,8 @@ class RobinhoodClient:
         Returns:
             Dict with quote data including previous_close or None if not found
         """
-        if not self.is_authenticated:
-            raise RobinhoodAPIError("Not authenticated. Call authenticate() first.")
+        # Ensure session is active before API call
+        self._ensure_session()
         
         try:
             # Use get_quotes for detailed data including previous_close

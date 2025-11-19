@@ -109,14 +109,17 @@ const CustomFooter = ({ holdings }: { holdings: Holding[] }) => {
 export const HoldingsTable = () => {
   const dispatch = useAppDispatch();
   const { holdings, isLoading, error, filters } = useAppSelector((state) => state.holdings);
+  const { accounts } = useAppSelector((state) => state.robinhood);
   const [sortModel, setSortModel] = useState<GridSortModel>([
     { field: 'market_value', sort: 'desc' },
   ]);
 
-  // Fetch holdings when component mounts or filters change
+  // Fetch holdings when component mounts or filters change, only if accounts exist
   useEffect(() => {
-    dispatch(fetchHoldings(filters));
-  }, [dispatch, filters]);
+    if (accounts.length > 0) {
+      dispatch(fetchHoldings(filters));
+    }
+  }, [dispatch, filters, accounts.length]);
 
   const handleRefresh = () => {
     dispatch(fetchHoldings(filters));

@@ -10,12 +10,14 @@ import type { TypedUseSelectorHook } from 'react-redux';
 import authReducer from '../features/auth/store/authSlice';
 import portfolioReducer from '../features/portfolio/store/portfolioSlice';
 import holdingsReducer from '../features/holdings/store/holdingsSlice';
+import robinhoodReducer from '../features/settings/store/robinhoodSlice';
 
 export const store = configureStore({
   reducer: {
     auth: authReducer,
     portfolio: portfolioReducer,
     holdings: holdingsReducer,
+    robinhood: robinhoodReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
