@@ -10,8 +10,8 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
-email = 'jitendra.purohit6262@gmail.com'
-password = 'Sevenwonder7744!'
+email = '***'
+password = '***'
 
 if User.objects.filter(email=email).exists():
     print(f'✅ Superuser with email {email} already exists.')
